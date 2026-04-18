@@ -1,4 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
+import * as https from 'https';
+import { LANGUAGE_CODES } from './languages';
 
 export interface TranslationRequest {
 	text: string;
@@ -9,69 +10,112 @@ export interface ITranslator {
 	translateBatch(requests: TranslationRequest[], targetLanguage: string): Promise<string[]>;
 }
 
-const SYSTEM_PROMPT =
-	'You are a code translation assistant. Your job is to translate code elements ' +
-	'(comments and identifiers) into a specified target language while preserving ' +
-	'programming conventions. For identifiers, produce a single camelCase or lowercase ' +
-	'word in the target language. For comments, translate the full text naturally. ' +
-	'Always respond with a valid JSON array of strings, one translation per element, ' +
-	'in the same order as the input. Output nothing except the JSON array.';
+// ── Identifier helpers ────────────────────────────────────────────────────────
 
-export class ClaudeTranslator implements ITranslator {
-	private readonly client: Anthropic;
+type IdentifierStyle = 'camel' | 'pascal' | 'snake' | 'other';
 
-	constructor(apiKey?: string) {
-		this.client = new Anthropic({ apiKey });
+function splitIdentifier(name: string): { words: string[]; style: IdentifierStyle } {
+	if (name.includes('_')) {
+		return { words: name.split('_').filter(Boolean), style: 'snake' };
+	}
+	const isPascal = /^[A-Z]/.test(name);
+	const words = name
+		.replace(/([A-Z])/g, ' $1')
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((w) => w.toLowerCase());
+	return { words, style: isPascal ? 'pascal' : 'camel' };
+}
+
+function capitalize(w: string): string {
+	return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+}
+
+function joinIdentifier(words: string[], style: IdentifierStyle): string {
+	if (!words.length) { return ''; }
+
+	// Non-Latin scripts (CJK, Arabic, Cyrillic, etc.): concatenate without separators
+	const hasNonLatin = words.some((w) => /[^\x00-\x7F]/.test(w));
+	if (hasNonLatin) {
+		return words.join('');
 	}
 
+	const clean = words
+		.map((w) => w.replace(/[^a-z0-9]/gi, '').toLowerCase())
+		.filter(Boolean);
+	if (!clean.length) { return words.join(''); }
+
+	if (style === 'snake')  { return clean.join('_'); }
+	if (style === 'pascal') { return clean.map(capitalize).join(''); }
+	// camelCase
+	return clean[0] + clean.slice(1).map(capitalize).join('');
+}
+
+// ── Google Translate free endpoint (no API key required) ─────────────────────
+
+function googleTranslate(text: string, to: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const url =
+			'https://translate.googleapis.com/translate_a/single' +
+			`?client=gtx&sl=auto&tl=${encodeURIComponent(to)}` +
+			`&dt=t&q=${encodeURIComponent(text)}`;
+
+		https
+			.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+				let raw = '';
+				res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
+				res.on('end', () => {
+					try {
+						const parsed = JSON.parse(raw) as [Array<[string, string]>];
+						const result = parsed[0].map((part) => part[0]).join('');
+						resolve(result);
+					} catch {
+						reject(new Error('Could not parse translation response'));
+					}
+				});
+			})
+			.on('error', (err) => reject(new Error(`Translation request failed: ${err.message}`)));
+	});
+}
+
+// ── FreeTranslator ────────────────────────────────────────────────────────────
+
+export class FreeTranslator implements ITranslator {
 	async translateBatch(requests: TranslationRequest[], targetLanguage: string): Promise<string[]> {
-		if (requests.length === 0) {
-			return [];
-		}
+		if (requests.length === 0) { return []; }
 
-		const numbered = requests
-			.map((r, i) => `${i + 1}. (${r.type}) ${JSON.stringify(r.text)}`)
-			.join('\n');
+		const langCode = (LANGUAGE_CODES as Record<string, string>)[targetLanguage] ?? 'es';
 
-		const userPrompt =
-			`Translate the following code elements to ${targetLanguage}.\n` +
-			`Return a JSON array with exactly ${requests.length} translated strings.\n\n` +
-			`Elements:\n${numbered}`;
-
-		const message = await this.client.messages.create({
-			model: 'claude-opus-4-7',
-			max_tokens: 2048,
-			system: [
-				{
-					type: 'text',
-					text: SYSTEM_PROMPT,
-					// Cache the stable system prompt across repeated translation calls
-					cache_control: { type: 'ephemeral' },
-				},
-			],
-			messages: [{ role: 'user', content: userPrompt }],
+		// Prepare: split camelCase/snake_case identifiers into space-separated words
+		// so Google Translate understands each word individually.
+		const styles: Array<IdentifierStyle | null> = [];
+		const texts = requests.map((r, i) => {
+			if (r.type === 'identifier') {
+				const { words, style } = splitIdentifier(r.text);
+				styles[i] = style;
+				return words.join(' ');
+			}
+			styles[i] = null;
+			return r.text;
 		});
 
-		const block = message.content[0];
-		if (block.type !== 'text') {
-			throw new Error('Unexpected response type from Claude API');
-		}
+		// One HTTP call: batch via newlines (Google Translate preserves them).
+		const translated = await googleTranslate(texts.join('\n'), langCode);
+		const parts = translated.split('\n');
 
-		const jsonMatch = block.text.match(/\[[\s\S]*\]/);
-		if (!jsonMatch) {
-			throw new Error('Could not parse JSON array from translation response');
-		}
-
-		const translations: unknown = JSON.parse(jsonMatch[0]);
-		if (!Array.isArray(translations) || translations.length !== requests.length) {
-			throw new Error(
-				`Expected ${requests.length} translations, got ${Array.isArray(translations) ? translations.length : 'non-array'}`
-			);
-		}
-
-		return translations.map((t) => (typeof t === 'string' ? t : String(t)));
+		return requests.map((r, i) => {
+			const raw = (parts[i] ?? r.text).trim();
+			const style = styles[i];
+			if (style !== null) {
+				return joinIdentifier(raw.split(/\s+/).filter(Boolean), style);
+			}
+			return raw;
+		});
 	}
 }
+
+// ── MockTranslator (used in tests) ────────────────────────────────────────────
 
 export class MockTranslator implements ITranslator {
 	private readonly translations: Map<string, string>;

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ClaudeTranslator } from './translator';
+import { FreeTranslator } from './translator';
 import { transformCode } from './codeTransformer';
 import { SUPPORTED_LANGUAGES } from './languages';
 
@@ -7,22 +7,8 @@ function getConfig() {
 	return vscode.workspace.getConfiguration('universalLanguageHandler');
 }
 
-function getTranslator(): ClaudeTranslator | null {
-	const config = getConfig();
-	const apiKey =
-		(config.get<string>('anthropicApiKey') || '').trim() ||
-		process.env.ANTHROPIC_API_KEY;
-
-	if (!apiKey) {
-		vscode.window.showErrorMessage(
-			'Anthropic API key not configured. ' +
-			'Set "universalLanguageHandler.anthropicApiKey" in settings ' +
-			'or the ANTHROPIC_API_KEY environment variable.'
-		);
-		return null;
-	}
-
-	return new ClaudeTranslator(apiKey);
+function getTranslator(): FreeTranslator {
+	return new FreeTranslator();
 }
 
 async function runTranslation(
@@ -31,7 +17,6 @@ async function runTranslation(
 	range: vscode.Range
 ): Promise<void> {
 	const translator = getTranslator();
-	if (!translator) { return; }
 
 	const config = getConfig();
 	const targetLanguage = config.get<string>('targetLanguage', 'Spanish');

@@ -38,11 +38,6 @@
 					"default": "Spanish",
 					"description": "Target language for code translation"
 				},
-				"universalLanguageHandler.anthropicApiKey": {
-					"type": "string",
-					"default": "",
-					"markdownDescription": "Anthropic API key. Can also be set via the `ANTHROPIC_API_KEY` environment variable."
-				},
 				"universalLanguageHandler.translateComments": {
 					"type": "boolean",
 					"default": true,
@@ -67,9 +62,6 @@
 		"lint": "eslint src --ext ts",
 		"test": "node ./out/test/runTest.js",
 		"test:unit": "npm run test-compile && mocha --ui tdd --timeout 10000 \"out/test/unit/**/*.test.js\""
-	},
-	"dependencies": {
-		"@anthropic-ai/sdk": "^0.90.0"
 	},
 	"devDependencies": {
 		"@types/glob": "^7.2.0",

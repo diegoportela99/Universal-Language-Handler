@@ -28,6 +28,5 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(config.get('targetLanguage'), 'Spanish');
 		assert.strictEqual(config.get('translateComments'), true);
 		assert.strictEqual(config.get('translateIdentifiers'), true);
-		assert.strictEqual(config.get('anthropicApiKey'), '');
 	});
 });
