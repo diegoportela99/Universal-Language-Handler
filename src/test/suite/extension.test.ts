@@ -1,15 +1,32 @@
 import * as assert from 'assert';
-
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
 import * as vscode from 'vscode';
-// import * as myExtension from '../../extension';
 
 suite('Extension Test Suite', () => {
-	vscode.window.showInformationMessage('Start all tests.');
+	test('Extension is present', () => {
+		const ext = vscode.extensions.getExtension('undefined_publisher.universal-language-handler');
+		assert.ok(ext, 'Extension should be registered');
+	});
 
-	test('Sample test', () => {
-		assert.strictEqual(-1, [1, 2, 3].indexOf(5));
-		assert.strictEqual(-1, [1, 2, 3].indexOf(0));
+	test('All three commands are registered', async () => {
+		const commands = await vscode.commands.getCommands(true);
+		assert.ok(
+			commands.includes('universal-language-handler.translateFile'),
+			'translateFile command should be registered'
+		);
+		assert.ok(
+			commands.includes('universal-language-handler.translateSelection'),
+			'translateSelection command should be registered'
+		);
+		assert.ok(
+			commands.includes('universal-language-handler.setLanguage'),
+			'setLanguage command should be registered'
+		);
+	});
+
+	test('Default configuration values are correct', () => {
+		const config = vscode.workspace.getConfiguration('universalLanguageHandler');
+		assert.strictEqual(config.get('targetLanguage'), 'Spanish');
+		assert.strictEqual(config.get('translateComments'), true);
+		assert.strictEqual(config.get('translateIdentifiers'), true);
 	});
 });
